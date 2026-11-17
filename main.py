@@ -1,9 +1,11 @@
 import sqlite3
 import sys
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QDate, QRegularExpression, Qt, pyqtSignal
+from PyQt6.QtGui import QRegularExpressionValidator
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QApplication, QDialog, QDialogButtonBox, QFormLayout,
+    QAbstractItemView, QApplication, QComboBox, QDateEdit, QDialog,
+    QDialogButtonBox, QFormLayout,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
@@ -21,6 +23,10 @@ PERMISSIONS = {
     "doctor": {"add": True, "edit": True, "delete": False},
     "nurse": {"add": False, "edit": False, "delete": False},
 }
+
+PROTECTED_USERS = ("admin", "doctor", "nurse")
+
+DATE_FORMAT = "dd.MM.yyyy"
 
 COLUMNS = ["ФИО", "Дата рождения", "Диагноз", "Палата", "Дата поступления"]
 
@@ -47,6 +53,28 @@ STYLE = """
     QPushButton:disabled { background-color: #90a4ae; }
     QTableWidget {
         border: 2px solid #455a64; gridline-color: #b0bec5;
+        background-color: #ffffff; color: #000000;
+        selection-background-color: #1565c0; selection-color: #ffffff;
+    }
+    QTableWidget::item:selected {
+        background-color: #1565c0; color: #ffffff;
+    }
+    QTableWidget::item:selected:!active {
+        background-color: #1565c0; color: #ffffff;
+    }
+    QComboBox, QDateEdit {
+        padding: 8px; border: 2px solid #455a64;
+        background-color: #ffffff; color: #000000;
+    }
+    QCalendarWidget QWidget { background-color: #ffffff; color: #000000; }
+    QCalendarWidget QToolButton {
+        background-color: #263238; color: #ffffff; padding: 4px;
+    }
+    QCalendarWidget QAbstractItemView {
+        background-color: #ffffff; color: #000000;
+        selection-background-color: #1565c0; selection-color: #ffffff;
+    }
+    QComboBox QAbstractItemView {
         background-color: #ffffff; color: #000000;
         selection-background-color: #1565c0; selection-color: #ffffff;
     }
@@ -86,14 +114,32 @@ class PatientDialog(QDialog):
         self.setWindowTitle("Пациент")
         self.setMinimumWidth(420)
 
-        self.inputs = []
+        self.name_input = QLineEdit()
+        self.birth_input = self.make_date_edit()
+        self.diagnosis_input = QLineEdit()
+        self.ward_input = QLineEdit()
+        self.ward_input.setValidator(
+            QRegularExpressionValidator(QRegularExpression(r"\d{0,4}"))
+        )
+        self.admission_input = self.make_date_edit()
+
+        if values:
+            self.name_input.setText(values[0])
+            self.birth_input.setDate(QDate.fromString(values[1], DATE_FORMAT))
+            self.diagnosis_input.setText(values[2])
+            self.ward_input.setText(values[3])
+            self.admission_input.setDate(QDate.fromString(values[4], DATE_FORMAT))
+        else:
+            self.birth_input.setDate(QDate(2000, 1, 1))
+            self.admission_input.setDate(QDate.currentDate())
+
+        self.inputs = [
+            self.name_input, self.birth_input, self.diagnosis_input,
+            self.ward_input, self.admission_input,
+        ]
         form = QFormLayout()
-        for i, name in enumerate(COLUMNS):
-            line = QLineEdit()
-            if values:
-                line.setText(values[i])
-            form.addRow(name + ":", line)
-            self.inputs.append(line)
+        for name, widget in zip(COLUMNS, self.inputs):
+            form.addRow(name + ":", widget)
 
         self.error_label = QLabel("")
         self.error_label.setStyleSheet("color: #b71c1c; font-weight: bold;")
@@ -112,17 +158,127 @@ class PatientDialog(QDialog):
         layout.addWidget(self.error_label)
         layout.addWidget(buttons)
 
+    def make_date_edit(self):
+        date_edit = QDateEdit()
+        date_edit.setCalendarPopup(True)
+        date_edit.setDisplayFormat(DATE_FORMAT)
+        date_edit.setMinimumDate(QDate(1900, 1, 1))
+        date_edit.setMaximumDate(QDate.currentDate())
+        return date_edit
+
     def validate(self):
-        if any(not line.text().strip() for line in self.inputs):
+        if (
+            not self.name_input.text().strip()
+            or not self.diagnosis_input.text().strip()
+            or not self.ward_input.text().strip()
+        ):
             self.error_label.setText("Заполните все поля")
+            return
+        if self.admission_input.date() < self.birth_input.date():
+            self.error_label.setText("Дата поступления раньше даты рождения")
             return
         self.accept()
 
     def get_values(self):
-        return [line.text().strip() for line in self.inputs]
+        return [
+            self.name_input.text().strip(),
+            self.birth_input.date().toString(DATE_FORMAT),
+            self.diagnosis_input.text().strip(),
+            self.ward_input.text().strip(),
+            self.admission_input.date().toString(DATE_FORMAT),
+        ]
+
+
+class RegisterDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Регистрация пользователя")
+        self.setMinimumWidth(380)
+
+        self.login_input = QLineEdit()
+        self.password_input = QLineEdit()
+        self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.role_box = QComboBox()
+        for role, name in ROLE_NAMES.items():
+            self.role_box.addItem(name, role)
+
+        form = QFormLayout()
+        form.addRow("Логин:", self.login_input)
+        form.addRow("Пароль:", self.password_input)
+        form.addRow("Роль:", self.role_box)
+
+        self.error_label = QLabel("")
+        self.error_label.setStyleSheet("color: #b71c1c; font-weight: bold;")
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Создать")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Отмена")
+        buttons.accepted.connect(self.register)
+        buttons.rejected.connect(self.reject)
+
+        layout = QVBoxLayout(self)
+        layout.addLayout(form)
+        layout.addWidget(self.error_label)
+        layout.addWidget(buttons)
+
+    def register(self):
+        login = self.login_input.text().strip()
+        password = self.password_input.text()
+        role = self.role_box.currentData()
+
+        if not login or not password:
+            self.error_label.setText("Заполните логин и пароль")
+            return
+
+        try:
+            with sqlite3.connect(DB_NAME) as con:
+                con.execute(
+                    "INSERT INTO users (login, password, role) VALUES (?, ?, ?)",
+                    (login, password, role),
+                )
+                con.commit()
+        except sqlite3.IntegrityError:
+            self.error_label.setText("Такой логин уже существует")
+            return
+
+        self.accept()
+
+
+class DeleteUserDialog(QDialog):
+    def __init__(self, parent, logins):
+        super().__init__(parent)
+        self.setWindowTitle("Удаление пользователя")
+        self.setMinimumWidth(380)
+
+        self.user_box = QComboBox()
+        self.user_box.addItems(logins)
+
+        form = QFormLayout()
+        form.addRow("Пользователь:", self.user_box)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Удалить")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Отмена")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+        layout = QVBoxLayout(self)
+        layout.addLayout(form)
+        layout.addWidget(buttons)
+
+    def selected_login(self):
+        return self.user_box.currentText()
 
 
 class MainWindow(QWidget):
+    logged_out = pyqtSignal()
+
     def __init__(self, login, role):
         super().__init__()
         self.login = login
@@ -169,8 +325,57 @@ class MainWindow(QWidget):
             delete_button = QPushButton("Удалить")
             delete_button.clicked.connect(self.delete_patient)
             buttons.addWidget(delete_button)
+        if self.role == "admin":
+            register_button = QPushButton("Новый пользователь")
+            register_button.clicked.connect(self.register_user)
+            buttons.addWidget(register_button)
+            delete_user_button = QPushButton("Удалить пользователя")
+            delete_user_button.clicked.connect(self.delete_user)
+            buttons.addWidget(delete_user_button)
         buttons.addStretch()
+        logout_button = QPushButton("Выйти из аккаунта")
+        logout_button.clicked.connect(self.logout)
+        buttons.addWidget(logout_button)
         layout.addLayout(buttons)
+
+    def register_user(self):
+        dialog = RegisterDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            QMessageBox.information(self, "Готово", "Пользователь создан")
+
+    def delete_user(self):
+        placeholders = ", ".join("?" for _ in PROTECTED_USERS)
+        with sqlite3.connect(DB_NAME) as con:
+            rows = con.execute(
+                f"SELECT login FROM users WHERE login NOT IN ({placeholders}) "
+                "AND login != ? ORDER BY login",
+                PROTECTED_USERS + (self.login,),
+            ).fetchall()
+
+        logins = [row[0] for row in rows]
+        if not logins:
+            QMessageBox.information(
+                self, "Удаление", "Нет созданных пользователей для удаления"
+            )
+            return
+
+        dialog = DeleteUserDialog(self, logins)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        login = dialog.selected_login()
+        answer = QMessageBox.question(
+            self, "Удаление", f"Удалить пользователя {login}?"
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            with sqlite3.connect(DB_NAME) as con:
+                con.execute("DELETE FROM users WHERE login = ?", (login,))
+                con.commit()
+            QMessageBox.information(self, "Готово", "Пользователь удалён")
+
+    def logout(self):
+        self.logged_out.emit()
+        self.close()
 
     def load_patients(self):
         with sqlite3.connect(DB_NAME) as con:
@@ -243,17 +448,22 @@ class App:
     def __init__(self):
         init_users_table()
         init_patients_table()
+        self.login_window = None
+        self.main_window = None
+
+    def show_login(self):
         self.login_window = LoginWindow()
         self.login_window.logged_in.connect(self.open_main_window)
-        self.main_window = None
+        self.login_window.show()
 
     def open_main_window(self, login, role):
         self.main_window = MainWindow(login, role)
+        self.main_window.logged_out.connect(self.show_login)
         self.main_window.show()
         self.login_window.close()
 
     def start(self):
-        self.login_window.show()
+        self.show_login()
 
 
 if __name__ == "__main__":
